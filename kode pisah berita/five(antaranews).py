@@ -47,7 +47,7 @@ def parse_tanggal_indonesia(tanggal_str):
     return now 
 
 def scrape_berita_jambi():
-    base_url = "https://jambi.antaranews.com/ekonomi"
+    base_url = "https://jambi.antaranews.com/terkini"
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
@@ -56,9 +56,9 @@ def scrape_berita_jambi():
     halaman = 1
     lanjut_scraping = True
     
-    print("Memulai ekstraksi data: Judul, Tanggal, Kategori, Link (Jan - Feb 2026, Maks 100 Halaman)...\n")
+    print("Memulai ekstraksi SEMUA berita: Judul, Tanggal, Kategori, Link...\n")
 
-    while lanjut_scraping and halaman <= 100:
+    while lanjut_scraping:
         url = base_url if halaman == 1 else f"{base_url}/{halaman}"
         
         try:
@@ -94,7 +94,7 @@ def scrape_berita_jambi():
             
             # 2. Kategori & Tanggal (berada di dalam <p class="simple-share">)
             share_p = header.find('p', class_='simple-share')
-            kategori = "Ekonomi" # Default fallback
+            kategori = "Umum" # Default fallback
             tanggal_str = ""
             
             if share_p:
@@ -108,36 +108,24 @@ def scrape_berita_jambi():
                 if span_date:
                     tanggal_str = span_date.text.strip()
             
-            tanggal_berita = parse_tanggal_indonesia(tanggal_str)
+            berita_terkumpul.append({
+                'Judul': judul,
+                'Tanggal': tanggal_str,
+                'Kategori': kategori,
+                'Link': link
+            })
             
-            # Logika Filter Waktu
-            if tanggal_berita.year < 2026:
-                lanjut_scraping = False
-                break
-                
-            if tanggal_berita.year == 2026 and tanggal_berita.month > 2:
-                continue
-                
-            if tanggal_berita.year == 2026 and tanggal_berita.month in [1, 2]:
-                berita_terkumpul.append({
-                    'Judul': judul,
-                    'Tanggal': tanggal_str,
-                    'Kategori': kategori,
-                    'Link': link
-                })
-            
-        print(f"Halaman {halaman} selesai diproses.")
+        print(f"Halaman {halaman} selesai diproses. Total: {len(berita_terkumpul)} berita")
         halaman += 1
 
-    if halaman > 100:
-        print("\nBatas maksimal 100 halaman telah tercapai.")
+    print("\nScraping selesai. Tidak ada halaman lagi atau batas telah tercapai.")
 
     return berita_terkumpul
 
 if __name__ == "__main__":
     data = scrape_berita_jambi()
     
-    nama_file = 'berita_ekonomi_jan_feb_2026.csv'
+    nama_file = 'semua_berita_antaranews_jambi.csv'
     
     if data:
         with open(nama_file, mode='w', newline='', encoding='utf-8') as file:
