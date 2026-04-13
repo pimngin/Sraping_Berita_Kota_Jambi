@@ -88,6 +88,16 @@ def parse_general_date(date_str):
             return datetime(year, month, day)
     except:
         pass
+
+    # Format numerik DD-MM-YYYY (contoh: "12-04-2026" dari Jambi Ekspres)
+    try:
+        match = re.search(r"(\d{1,2})-(\d{1,2})-(\d{4})", date_str)
+        if match:
+            day, month, year = match.groups()
+            return datetime(int(year), int(month), int(day))
+    except:
+        pass
+
     return None
 
 
@@ -645,6 +655,178 @@ def scrape_jambi_one(start_date, end_date, keywords, status_callback):
     return scraped_data
 
 
+def fetch_jambiekspres_date(url):
+    """
+    Fetch halaman detail artikel Jambi Ekspres untuk mendapatkan tanggal publikasi.
+    Selektor sudah diverifikasi dari outerHTML asli:
+        div.post-info span.date → "Minggu 12-04-2026,10:07 WIB"
+    Mengembalikan (date_text, date_obj) atau ("-", None) jika tidak ditemukan.
+    """
+    try:
+        response = requests.get(url, headers=HEADERS, timeout=10)
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        post_info = soup.find("div", class_="post-info")
+        if post_info:
+            span_date = post_info.find("span", class_="date")
+            if span_date:
+                date_text = clean_text(span_date.get_text())
+                date_obj = parse_general_date(date_text)
+                if date_obj:
+                    return date_text, date_obj
+    except:
+        pass
+
+    return "-", None
+
+
+def scrape_jambiekspres(start_date, end_date, keywords, status_callback):
+    """
+    Scrape Jambi Ekspres - URL: https://jambiekspres.disway.id/kategori/ekonomi
+    Pagination: /30, /60, /90, dst (kelipatan 30).
+    Tanggal diambil dari halaman detail (Opsi 3):
+    - Concurrent fetch 5 detail sekaligus
+    - Skip fetch detail jika keyword tidak cocok di judul (hemat request)
+    """
+    url_base = "https://jambiekspres.disway.id/kategori/ekonomi"
+    scraped_data = []
+    link_terscrape = set()
+    page = 1
+    status_callback("🔍 Jambi Ekspres: Mencari berita...")
+
+    while True:
+        try:
+            # Format pagination: kelipatan 30
+            if page == 1:
+                url = url_base
+            else:
+                url = f"{url_base}/{(page - 1) * 30}"
+
+            response = requests.get(url, headers=HEADERS, timeout=10)
+            if response.status_code != 200:
+                break
+
+            soup = BeautifulSoup(response.text, "html.parser")
+            articles = soup.find_all("div", class_="media-content")
+            if not articles:
+                break
+
+            # --- Tahap 1: Kumpulkan kandidat dari listing ---
+            kandidat = []
+            for article in articles:
+                h2_tag = article.find("h2", class_="media-heading")
+                if not h2_tag:
+                    continue
+                a_tag = h2_tag.find("a")
+                if not a_tag:
+                    continue
+
+                link = a_tag.get("href", "")
+                if not link or link in link_terscrape:
+                    continue
+
+                title = clean_text(a_tag.get_text())
+
+                kategori_el = article.find("p", class_="text-uppercase")
+                kategori = (
+                    clean_text(kategori_el.get_text()) if kategori_el else "Ekonomi"
+                )
+
+                # Jika ada keyword, cek judul dulu — jika tidak cocok skip fetch detail
+                if keywords and not keyword_match(title, keywords):
+                    continue
+
+                kandidat.append(
+                    {
+                        "link": link,
+                        "title": title,
+                        "kategori": kategori,
+                    }
+                )
+
+            if not kandidat:
+                page += 1
+                if page > 50:
+                    break
+                time.sleep(1)
+                continue
+
+            # --- Tahap 2: Concurrent fetch detail untuk ambil tanggal ---
+            status_callback(
+                f"🔍 Jambi Ekspres: Hal. {page} | Fetch tanggal {len(kandidat)} artikel..."
+            )
+
+            def fetch_with_meta(item):
+                date_text, date_obj = fetch_jambiekspres_date(item["link"])
+                return {**item, "date_text": date_text, "date_obj": date_obj}
+
+            hasil_fetch = []
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                futures = {executor.submit(fetch_with_meta, k): k for k in kandidat}
+                for future in as_completed(futures):
+                    try:
+                        hasil_fetch.append(future.result())
+                    except:
+                        pass
+
+            # --- Tahap 3: Filter berdasarkan rentang tanggal ---
+            stop_scraping = False
+            artikel_baru_di_halaman_ini = 0
+
+            # Urutkan hasil fetch berdasarkan urutan asli listing
+            hasil_fetch.sort(
+                key=lambda x: kandidat.index(
+                    next(k for k in kandidat if k["link"] == x["link"])
+                )
+            )
+
+            for hasil in hasil_fetch:
+                link = hasil["link"]
+                title = hasil["title"]
+                kategori = hasil["kategori"]
+                date_text = hasil["date_text"]
+                date_obj = hasil["date_obj"]
+
+                if link in link_terscrape:
+                    continue
+
+                if is_in_range(date_obj, start_date, end_date):
+                    link_terscrape.add(link)
+                    artikel_baru_di_halaman_ini += 1
+                    scraped_data.append(
+                        {
+                            "Sumber": "Jambi Ekspres",
+                            "Kategori": kategori,
+                            "Judul": title,
+                            "Deskripsi": "-",
+                            "Tanggal": date_text,
+                            "Link": link,
+                        }
+                    )
+                elif is_older_than_start(date_obj, start_date):
+                    stop_scraping = True
+                    break
+
+            if stop_scraping:
+                break
+
+            if artikel_baru_di_halaman_ini == 0:
+                break
+
+            page += 1
+            status_callback(
+                f"🔍 Jambi Ekspres: Halaman {page}... ({len(scraped_data)} ditemukan)"
+            )
+            time.sleep(1)
+
+        except Exception as e:
+            status_callback(f"⚠️ Jambi Ekspres error: {e}")
+            break
+
+    status_callback(f"✅ Jambi Ekspres: {len(scraped_data)} berita ditemukan.")
+    return scraped_data
+
+
 def scrape_antara_jambi(start_date, end_date, keywords, status_callback):
     """
     Scrape Antara News Jambi - versi tim (batch parallel fetch).
@@ -918,6 +1100,7 @@ class AplikasiScraper:
         self.var_jambupdate = tk.BooleanVar(value=True)
         self.var_jambione = tk.BooleanVar(value=True)
         self.var_antara = tk.BooleanVar(value=True)
+        self.var_jambiekspres = tk.BooleanVar(value=True)
 
         tk.Checkbutton(
             frame_sumber, text="Pemkot Jambi", variable=self.var_pemkot
@@ -933,6 +1116,9 @@ class AplikasiScraper:
         )
         tk.Checkbutton(
             frame_sumber, text="Antara News Jambi", variable=self.var_antara
+        ).pack(side=tk.LEFT, padx=5)
+        tk.Checkbutton(
+            frame_sumber, text="Jambi Ekspres", variable=self.var_jambiekspres
         ).pack(side=tk.LEFT, padx=5)
 
         # Status
@@ -1085,6 +1271,11 @@ class AplikasiScraper:
         if self.var_antara.get():
             t = threading.Thread(
                 target=run_scraper, args=("antara", scrape_antara_jambi)
+            )
+            threads.append(t)
+        if self.var_jambiekspres.get():
+            t = threading.Thread(
+                target=run_scraper, args=("jambiekspres", scrape_jambiekspres)
             )
             threads.append(t)
 
