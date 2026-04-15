@@ -8,6 +8,9 @@ from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import quote_plus
 import csv
+from openpyxl import Workbook
+from openpyxl.styles import Font, Alignment
+from openpyxl.utils import get_column_letter
 import re
 import time
 
@@ -1143,7 +1146,7 @@ class AplikasiScraper:
 
         self.btn_export = tk.Button(
             frame_tengah,
-            text="📥 Export CSV",
+            text="📥 Export Excel",
             bg="#2196F3",
             fg="white",
             font=("Arial", 9, "bold"),
@@ -1334,31 +1337,66 @@ class AplikasiScraper:
             return
 
         file_path = filedialog.asksaveasfilename(
-            defaultextension=".csv",
-            filetypes=[("CSV files", "*.csv")],
+            defaultextension=".xlsx",
+            filetypes=[("Excel files", "*.xlsx"), ("CSV files", "*.csv")],
             title="Simpan Data Berita",
-            initialfile=f"Data_Berita_{datetime.now().strftime('%d_%m_%Y')}.csv",
+            initialfile=f"Data_Berita_{datetime.now().strftime('%d_%m_%Y')}.xlsx",
         )
 
-        if file_path:
+        if not file_path:
+            return
+
+        # Jika user memilih .csv, simpan sebagai CSV biasa
+        if file_path.lower().endswith(".csv"):
             try:
-                with open(file_path, "w", newline="", encoding="utf-8") as f:
-                    fieldnames = [
-                        "Sumber",
-                        "Kategori",
-                        "Judul",
-                        "Deskripsi",
-                        "Tanggal",
-                        "Link",
-                    ]
+                with open(file_path, "w", newline="", encoding="utf-8-sig") as f:
+                    fieldnames = ["Sumber", "Kategori", "Judul", "Deskripsi", "Tanggal", "Link"]
                     writer = csv.DictWriter(f, fieldnames=fieldnames)
                     writer.writeheader()
                     writer.writerows(self.berita_tampil)
-                messagebox.showinfo(
-                    "Sukses", f"Data berhasil disimpan di:\n{file_path}"
-                )
+                messagebox.showinfo("Sukses", f"Data berhasil disimpan di:\n{file_path}")
             except Exception as e:
                 messagebox.showerror("Error", f"Gagal menyimpan file:\n{e}")
+            return
+
+        # Export sebagai Excel (.xlsx) dengan lebar kolom otomatis
+        try:
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Data Berita"
+
+            # Header
+            fieldnames = ["Sumber", "Kategori", "Judul", "Deskripsi", "Tanggal", "Link"]
+            header_font = Font(bold=True, size=11)
+            for col_idx, header in enumerate(fieldnames, 1):
+                cell = ws.cell(row=1, column=col_idx, value=header)
+                cell.font = header_font
+                cell.alignment = Alignment(horizontal="center")
+
+            # Data
+            for row_idx, item in enumerate(self.berita_tampil, 2):
+                for col_idx, key in enumerate(fieldnames, 1):
+                    cell = ws.cell(row=row_idx, column=col_idx, value=item.get(key, "-"))
+                    cell.alignment = Alignment(vertical="top", wrap_text=True)
+
+            # Auto-fit lebar kolom berdasarkan isi
+            for col_idx, key in enumerate(fieldnames, 1):
+                max_length = len(key)  # mulai dari panjang header
+                col_letter = get_column_letter(col_idx)
+                for row in range(2, ws.max_row + 1):
+                    cell_value = str(ws.cell(row=row, column=col_idx).value or "")
+                    # Hitung panjang baris terpanjang (untuk wrap_text)
+                    max_length = max(max_length, min(len(cell_value), 80))
+                # Tambah sedikit padding
+                ws.column_dimensions[col_letter].width = max_length + 4
+
+            # Freeze baris header agar tetap terlihat saat scroll
+            ws.freeze_panes = "A2"
+
+            wb.save(file_path)
+            messagebox.showinfo("Sukses", f"Data berhasil disimpan di:\n{file_path}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Gagal menyimpan file:\n{e}")
 
 
 if __name__ == "__main__":
