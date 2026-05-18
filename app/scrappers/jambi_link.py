@@ -12,21 +12,29 @@ from app.core.data_parser import is_in_range
 from app.scrappers.base import BaseScraper
 
 
-def _fetch_jambilink_date(url):
+def _fetch_jambilink_meta(url):
+    date_text_tampil, date_obj, kategori = "-", None, "-"
     try:
         response = requests.get(url, headers=HEADERS, timeout=10)
         soup = BeautifulSoup(response.text, "html.parser")
+        
+        # --- Ekstrak Tanggal ---
         time_tag = soup.find("time", class_="datetime")
         if time_tag:
             dt_attr = time_tag.get("datetime")
             if dt_attr:
                 date_str = dt_attr.split("T")[0]
                 date_obj = datetime.strptime(date_str, "%Y-%m-%d")
-                text_tampil = time_tag.get_text(strip=True) + " WIB"
-                return text_tampil, date_obj
+                date_text_tampil = time_tag.get_text(strip=True) + " WIB"
+
+        # --- Ekstrak Kategori ---
+        kat_div = soup.find("div", class_="field--name-field-kategori")
+        if kat_div and kat_div.find("a"):
+            kategori = clean_text(kat_div.find("a").get_text())
+            
     except:
         pass
-    return "-", None
+    return date_text_tampil, date_obj, kategori
 
 
 class JambiLinkScraper(BaseScraper):
@@ -98,8 +106,8 @@ class JambiLinkScraper(BaseScraper):
                 )
 
                 def fetch_with_meta(item):
-                    date_text, date_obj = _fetch_jambilink_date(item["link"])
-                    return {**item, "date_text": date_text, "date_obj": date_obj}
+                    date_text, date_obj, kategori = _fetch_jambilink_meta(item["link"])
+                    return {**item, "date_text": date_text, "date_obj": date_obj, "kategori": kategori}
 
                 hasil_fetch = []
                 with ThreadPoolExecutor(max_workers=5) as executor:
@@ -129,7 +137,7 @@ class JambiLinkScraper(BaseScraper):
                                 "Kategori": hasil["kategori"],
                                 "Judul": hasil["title"],
                                 "Deskripsi": hasil["desc"],
-                                "Tanggal": hasil["date_text"],
+                                "Tanggal": date_obj.strftime("%d-%m-%Y") if date_obj else hasil["date_text"],
                                 "Link": link,
                             }
                         )

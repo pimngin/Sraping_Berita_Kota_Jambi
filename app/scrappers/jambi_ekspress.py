@@ -11,21 +11,37 @@ from app.core.data_parser import parse_general_date, is_in_range, is_older_than_
 from app.scrappers.base import BaseScraper
 
 
-def _fetch_jambiekspres_date(url):
+def _fetch_jambiekspres_meta(url):
+    date_text, date_obj, desc = "-", None, "-"
     try:
         response = requests.get(url, headers=HEADERS, timeout=10)
         soup = BeautifulSoup(response.text, "html.parser")
+        
+        # Ekstrak Tanggal
         post_info = soup.find("div", class_="post-info")
         if post_info:
             span_date = post_info.find("span", class_="date")
             if span_date:
                 date_text = clean_text(span_date.get_text())
                 date_obj = parse_general_date(date_text)
-                if date_obj:
-                    return date_text, date_obj
+                
+        # Ekstrak Deskripsi
+        post_content = soup.find("div", class_="post")
+        if post_content:
+            for p in post_content.find_all("p", recursive=False):
+                # Buang tag strong agar teks awalan seperti lokasi/koran tidak ikut terbawa
+                for strong in p.find_all("strong"):
+                    strong.decompose()
+                
+                teks = clean_text(p.get_text())
+                # Hapus awalan "-" (termasuk en-dash dan em-dash) atau spasi sisa
+                teks = teks.lstrip("-—– ").strip()
+                if len(teks) > 20:
+                    desc = teks
+                    break
     except:
         pass
-    return "-", None
+    return date_text, date_obj, desc
 
 
 class JambiEkspressScraper(BaseScraper):
@@ -109,8 +125,8 @@ class JambiEkspressScraper(BaseScraper):
                 )
 
                 def fetch_with_meta(item):
-                    date_text, date_obj = _fetch_jambiekspres_date(item["link"])
-                    return {**item, "date_text": date_text, "date_obj": date_obj}
+                    date_text, date_obj, desc = _fetch_jambiekspres_meta(item["link"])
+                    return {**item, "date_text": date_text, "date_obj": date_obj, "deskripsi": desc}
 
                 hasil_fetch = []
                 with ThreadPoolExecutor(max_workers=5) as executor:
@@ -143,7 +159,7 @@ class JambiEkspressScraper(BaseScraper):
                                 "Sumber": "Jambi Ekspres",
                                 "Kategori": hasil["kategori"],
                                 "Judul": hasil["title"],
-                                "Deskripsi": "-",
+                                "Deskripsi": hasil["deskripsi"],
                                 "Tanggal": hasil["date_text"],
                                 "Link": link,
                             }

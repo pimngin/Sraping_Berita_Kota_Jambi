@@ -10,22 +10,34 @@ from app.core.data_parser import parse_general_date, is_in_range, is_older_than_
 from app.scrappers.base import BaseScraper
 
 
-def _fetch_tribun_article_date(url):
-    """Fetch tanggal dari halaman detail artikel Tribun."""
+def _fetch_tribun_article_meta(url):
+    """Fetch tanggal dan deskripsi dari halaman detail artikel Tribun."""
+    date_text, date_obj, desc = "-", None, "-"
     try:
         response = requests.get(url, headers=HEADERS, timeout=10)
         soup = BeautifulSoup(response.text, "html.parser")
+        
+        # Ekstrak Tanggal
         content_date = soup.find("div", class_="content-date")
         if content_date:
             span = content_date.find("span")
             if span:
                 date_text = clean_text(span.get_text())
                 date_obj = parse_general_date(date_text)
-                if date_obj:
-                    return date_text, date_obj
+                
+        # Ekstrak Deskripsi
+        content_text = soup.find("div", class_="content-text")
+        if content_text:
+            p_tags = content_text.find_all("p")
+            for p in p_tags:
+                teks_p = clean_text(p.get_text())
+                if len(teks_p) > 15:  # Abaikan paragraf kosong (&nbsp;) atau yang terlalu pendek
+                    desc = teks_p
+                    break
+                
     except:
         pass
-    return "-", None
+    return date_text, date_obj, desc
 
 
 class TribunJambiScraper(BaseScraper):
@@ -89,8 +101,8 @@ class TribunJambiScraper(BaseScraper):
                 )
 
                 def fetch_with_meta(item):
-                    date_text, date_obj = _fetch_tribun_article_date(item["link"])
-                    return {**item, "date_text": date_text, "date_obj": date_obj}
+                    date_text, date_obj, desc = _fetch_tribun_article_meta(item["link"])
+                    return {**item, "date_text": date_text, "date_obj": date_obj, "desc": desc}
 
                 hasil_fetch = []
                 with ThreadPoolExecutor(max_workers=5) as executor:
@@ -123,7 +135,7 @@ class TribunJambiScraper(BaseScraper):
                                 "Sumber": "Tribun Jambi",
                                 "Kategori": hasil["kategori"],
                                 "Judul": hasil["title"],
-                                "Deskripsi": "-",
+                                "Deskripsi": hasil["desc"],
                                 "Tanggal": hasil["date_text"],
                                 "Link": link,
                             }

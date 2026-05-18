@@ -20,6 +20,27 @@ def fetch_page(url):
         return url, None
 
 
+def _fetch_antara_desc(url):
+    desc = "-"
+    try:
+        response = requests.get(url, headers=HEADERS, timeout=10)
+        soup = BeautifulSoup(response.text, "html.parser")
+        
+        content_div = soup.find("div", class_="wrap__article-detail-content")
+        if content_div:
+            first_p = content_div.find("p")
+            if first_p:
+                lines = first_p.get_text(separator="\n").split("\n")
+                for line in lines:
+                    clean_line = clean_text(line)
+                    if len(clean_line) > 20:
+                        desc = clean_line
+                        break
+    except:
+        pass
+    return desc
+
+
 class AntaraJambiScraper(BaseScraper):
     nama_sumber = "Antara News Jambi"
 
@@ -57,6 +78,7 @@ class AntaraJambiScraper(BaseScraper):
             results = []
             should_stop = False
             soup = BeautifulSoup(html, "html.parser")
+            kandidat_valid = []
 
             for h_tag in soup.find_all(["h2", "h3"]):
                 a_tag = h_tag.find("a", href=re.compile(r"/berita/\d+/"))
@@ -73,7 +95,6 @@ class AntaraJambiScraper(BaseScraper):
                     continue
 
                 date_text = "-"
-                deskripsi = "-"
                 kategori = "Berita"
 
                 container = h_tag.find_parent(
@@ -99,31 +120,54 @@ class AntaraJambiScraper(BaseScraper):
                                 date_text = txt
                                 break
 
-                    for p_tag in container.find_all("p"):
-                        txt = clean_text(p_tag.get_text())
-                        if len(txt) > 20 and txt != judul:
-                            deskripsi = txt[:200]
-                            break
-
                 date_obj = parse_general_date(date_text)
 
                 if is_in_range(date_obj, start_date, end_date):
-                    gabungan = f"{judul} {deskripsi}"
-                    if keyword_match(gabungan, keywords):
-                        seen.add(nl)
-                        results.append(
-                            {
-                                "Sumber": "Antara News Jambi",
-                                "Kategori": kategori,
-                                "Judul": judul,
-                                "Deskripsi": deskripsi,
-                                "Tanggal": date_text,
-                                "Link": link,
-                            }
-                        )
+                    kandidat_valid.append({
+                        "judul": judul,
+                        "link": link,
+                        "nl": nl,
+                        "date_text": date_text,
+                        "kategori": kategori
+                    })
                 elif is_older_than_start(date_obj, start_date):
                     should_stop = True
                     break
+
+            def fetch_desc(item):
+                desc = _fetch_antara_desc(item["link"])
+                return {**item, "deskripsi": desc}
+
+            hasil_fetch = []
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                futures = {executor.submit(fetch_desc, k): k for k in kandidat_valid}
+                for future in as_completed(futures):
+                    try:
+                        hasil_fetch.append(future.result())
+                    except:
+                        pass
+
+            # Kembalikan urutan sesuai kandidat awal
+            hasil_fetch.sort(
+                key=lambda x: kandidat_valid.index(
+                    next(k for k in kandidat_valid if k["link"] == x["link"])
+                )
+            )
+
+            for hasil in hasil_fetch:
+                gabungan = f"{hasil['judul']} {hasil['deskripsi']}"
+                if not keywords or keyword_match(gabungan, keywords):
+                    seen.add(hasil["nl"])
+                    results.append(
+                        {
+                            "Sumber": "Antara News Jambi",
+                            "Kategori": hasil["kategori"],
+                            "Judul": hasil["judul"],
+                            "Deskripsi": hasil["deskripsi"],
+                            "Tanggal": hasil["date_text"],
+                            "Link": hasil["link"],
+                        }
+                    )
 
             return results, should_stop
 

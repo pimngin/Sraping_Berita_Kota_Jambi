@@ -2,10 +2,29 @@
 import time
 import cloudscraper
 from bs4 import BeautifulSoup
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from app.core.teks_utils import clean_text, keyword_match
 from app.core.data_parser import parse_general_date, is_in_range, is_older_than_start
 from app.scrappers.base import BaseScraper
+
+
+def _fetch_jambione_desc(url, scraper):
+    desc = "-"
+    try:
+        resp = scraper.get(url, timeout=15)
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, "html.parser")
+            article_div = soup.find("article", class_="read__content")
+            if article_div:
+                for p in article_div.find_all("p"):
+                    teks = clean_text(p.get_text())
+                    if len(teks) > 20 and "baca juga" not in teks.lower():
+                        desc = teks
+                        break
+    except:
+        pass
+    return desc
 
 
 class JambiOneScraper(BaseScraper):
@@ -48,6 +67,7 @@ class JambiOneScraper(BaseScraper):
 
                 stop_scraping = False
                 artikel_baru_di_halaman_ini = 0
+                kandidat_valid = []
 
                 for article in articles:
                     judul_el = article.select_one("h2.latest__title a.latest__link")
@@ -76,20 +96,48 @@ class JambiOneScraper(BaseScraper):
                     if is_in_range(date_obj, start_date, end_date):
                         link_terscrape.add(link)
                         artikel_baru_di_halaman_ini += 1
-                        if keyword_match(judul, keywords):
-                            scraped_data.append(
-                                {
-                                    "Sumber": "Jambi One",
-                                    "Kategori": kategori,
-                                    "Judul": judul,
-                                    "Deskripsi": "-",
-                                    "Tanggal": date_text,
-                                    "Link": link,
-                                }
-                            )
+                        kandidat_valid.append({
+                            "judul": judul,
+                            "kategori": kategori,
+                            "date_text": date_text,
+                            "link": link
+                        })
                     elif is_older_than_start(date_obj, start_date):
                         stop_scraping = True
                         break
+
+                def fetch_desc(item):
+                    desc = _fetch_jambione_desc(item["link"], scraper)
+                    return {**item, "deskripsi": desc}
+
+                hasil_fetch = []
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    futures = {executor.submit(fetch_desc, k): k for k in kandidat_valid}
+                    for future in as_completed(futures):
+                        try:
+                            hasil_fetch.append(future.result())
+                        except:
+                            pass
+
+                hasil_fetch.sort(
+                    key=lambda x: kandidat_valid.index(
+                        next(k for k in kandidat_valid if k["link"] == x["link"])
+                    )
+                )
+
+                for hasil in hasil_fetch:
+                    gabungan = f"{hasil['judul']} {hasil['deskripsi']}"
+                    if not keywords or keyword_match(gabungan, keywords):
+                        scraped_data.append(
+                            {
+                                "Sumber": "Jambi One",
+                                "Kategori": hasil["kategori"],
+                                "Judul": hasil["judul"],
+                                "Deskripsi": hasil["deskripsi"],
+                                "Tanggal": hasil["date_text"],
+                                "Link": hasil["link"],
+                            }
+                        )
 
                 if stop_scraping:
                     break

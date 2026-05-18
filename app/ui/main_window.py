@@ -8,7 +8,7 @@ from app.core.scrape_runner import jalankan_scraping
 class MainWindow:
     def __init__(self, root):
         self.root = root
-        self.root.title("Scraper Berita Jambi - Pencarian Berdasarkan Topik")
+        self.root.title("Scraper Berita Jambi")
         self.root.geometry("1150x700")
         self.root.configure(padx=10, pady=10)
 
